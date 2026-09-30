@@ -68,6 +68,28 @@ const S = {
     '..rrr..',
     '...r...',
   ]),
+  // Heil-Trank: gruenes Kreuz auf weisser Flasche
+  potion: sprite([
+    '..kkkk..',
+    '.kwwwwk.',
+    'kwwggwwk',
+    'kggggggk',
+    'kggggggk',
+    'kwwggwwk',
+    '.kwwwwk.',
+    '..kkkk..',
+  ]),
+  // Nova-Stern: Spezial-Item
+  star: sprite([
+    '...kk...',
+    '..kyyk..',
+    'kkkyykkk',
+    'kyyywyyk',
+    '.kyyyyk.',
+    '.kyykyk.',
+    'kyk..kyk',
+    'kk....kk',
+  ]),
 };
 
 // ---- Mini 3x5 Pixelfont ----
@@ -78,7 +100,7 @@ const FONT = {
   G:'111100101101111',H:'101101111101101',I:'111010010010111',J:'001001001101111',K:'101101110101101',L:'100100100100111',
   M:'101111111101101',N:'110101101101101',O:'111101101101111',P:'111101111100100',Q:'111101101111001',R:'111101110101101',
   S:'111100111001111',T:'111010010010010',U:'101101101101111',V:'101101101101010',W:'101101111111101',X:'101101010101101',
-  Y:'101101010010010',Z:'111001010100111','-':'000000111000000',':':'000010000010000','!':'010010010000010',' ':'000000000000000',
+  Y:'101101010010010',Z:'111001010100111','-':'000000111000000','+':'000010111010000',':':'000010000010000','!':'010010010000010',' ':'000000000000000',
 };
 function text(str, x, y, col = '#fff', scale = 1) {
   ctx.fillStyle = col;
@@ -109,10 +131,12 @@ const stars = Array.from({ length: 40 }, () => ({ x: Math.random() * W, y: Math.
 // ---- State ----
 let state = 'title', score = 0, lives = 3, best = +(localStorage.getItem('pixelcatcher') || 0);
 let player, items, parts, spawnT, time, shake;
+let rings, floats, trail, flash, combo, comboT, heal, regen, regenT, MAX_LIVES = 5;
 
 function reset() {
   player = { x: W / 2 - 5, y: H - 16, vx: 0 };
   items = []; parts = []; spawnT = 0; time = 0; score = 0; lives = 3; shake = 0;
+  rings = []; floats = []; trail = []; flash = null; combo = 0; comboT = 0; heal = 0; regen = 0; regenT = 0;
 }
 reset();
 
@@ -137,17 +161,79 @@ cv.addEventListener('mousedown', () => { if (state !== 'play') start(); });
 function start() { reset(); state = 'play'; beep(440, 0.1); beep(660, 0.15); }
 
 function burst(x, y, col, n = 8) {
-  for (let i = 0; i < n; i++) parts.push({ x, y, vx: (Math.random() - .5) * 2, vy: (Math.random() - .8) * 2, life: 20 + Math.random() * 15, col });
+  for (let i = 0; i < n; i++) parts.push({ x, y, vx: (Math.random() - .5) * 2, vy: (Math.random() - .8) * 2, g: 0.08, life: 20 + Math.random() * 15, col });
+}
+function ring(x, y, col, max = 30, speed = 1.6) { rings.push({ x, y, r: 2, max, speed, col }); }
+function pop(str, x, y, col) { floats.push({ str, x: x - tw(str) / 2, y, col, life: 40 }); }
+function doFlash(col, a = 0.5) { flash = { col, a }; }
+
+// Heil-Effekt: aufsteigende Pluszeichen, gruener Ring, Lichtschein
+function healFx(n) {
+  const cx = player.x + 5, cy = player.y + 4;
+  ring(cx, cy, '#57cc99', 22, 1.1); ring(cx, cy, '#d8f3dc', 14, 0.8);
+  for (let i = 0; i < 10; i++) parts.push({
+    x: cx + (Math.random() - .5) * 12, y: cy + 4, vx: (Math.random() - .5) * 0.4, vy: -0.4 - Math.random() * 0.8,
+    g: -0.005, life: 40 + Math.random() * 25, col: i % 2 ? '#57cc99' : '#d8f3dc', plus: true,
+  });
+  pop('+' + n, cx, player.y - 8, '#57cc99'); doFlash('#57cc99', 0.25); heal = 18;
+  [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.12, 'triangle', 0.06), i * 70));
+}
+function addLife(n) {
+  const g = Math.min(MAX_LIVES, lives + n) - lives;
+  if (g > 0) { lives += g; healFx(g); } else { pop('MAX', player.x + 5, player.y - 8, '#ffd23f'); beep(880, 0.06); }
+}
+
+// Nova: Schockwelle verwandelt alle Bomben in Punkte
+function nova() {
+  const cx = player.x + 5, cy = player.y + 4;
+  ring(cx, cy, '#ffffff', 190, 4); ring(cx, cy, '#ffd23f', 170, 3.4); ring(cx, cy, '#9b5de5', 150, 2.8);
+  doFlash('#ffffff', 0.8); shake = 18; pop('NOVA!', cx, player.y - 12, '#ffd23f');
+  let n = 0;
+  for (const b of items) if (b.type === 'bomb') {
+    b.dead = true; n++; burst(b.x + 4, b.y + 4, '#ffd23f', 10); burst(b.x + 4, b.y + 4, '#9b5de5', 6);
+  }
+  score += n * mult();
+  if (n) pop('+' + n * mult(), cx, player.y - 22, '#fff');
+  [196, 392, 784, 1568].forEach((f, i) => setTimeout(() => beep(f, 0.2, 'sawtooth', 0.06), i * 50));
+}
+const mult = () => combo >= 10 ? 3 : combo >= 5 ? 2 : 1;
+
+// Pixel-Ring (kein Anti-Aliasing)
+function drawRing(r) {
+  ctx.fillStyle = r.col;
+  const steps = Math.max(12, Math.floor(r.r * 5));
+  for (let i = 0; i < steps; i++) {
+    const a = i / steps * Math.PI * 2;
+    ctx.fillRect(Math.round(r.x + Math.cos(a) * r.r), Math.round(r.y + Math.sin(a) * r.r), 1, 1);
+  }
 }
 
 function update() {
   stars.forEach(s => { s.y += s.s; if (s.y > H) { s.y = 0; s.x = Math.random() * W; } });
-  parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.life--; });
+  parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += p.g; p.life--; });
   parts = parts.filter(p => p.life > 0);
+  rings.forEach(r => r.r += r.speed);
+  rings = rings.filter(r => r.r < r.max);
+  floats.forEach(f => { f.y -= 0.35; f.life--; });
+  floats = floats.filter(f => f.life > 0);
+  if (flash) { flash.a -= 0.04; if (flash.a <= 0) flash = null; }
+  if (heal > 0) heal--;
   if (shake > 0) shake--;
   if (state !== 'play') return;
 
   time++;
+  if (comboT > 0 && --comboT === 0) combo = 0;
+
+  // Regeneration nach Heiltrank: alle 2 Sekunden +1 Leben
+  if (regen > 0 && --regenT <= 0) { regen--; regenT = 120; addLife(1); }
+
+  // Nachbilder + Combo-Funken
+  if (time % 2 === 0) trail.push({ x: player.x, y: player.y, life: 10 });
+  trail.forEach(t => t.life--); trail = trail.filter(t => t.life > 0);
+  if (combo >= 5 && time % 3 === 0) parts.push({
+    x: player.x + Math.random() * 10, y: player.y + 6, vx: 0, vy: -0.5 - Math.random() * 0.5, g: 0,
+    life: 18, col: combo >= 10 ? '#e63946' : '#ffd23f',
+  });
   const dir = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
   if (touchX !== null) {
     const d = touchX - (player.x + 5);
@@ -158,8 +244,15 @@ function update() {
   const level = 1 + time / 600;
   if (--spawnT <= 0) {
     spawnT = Math.max(14, 45 - level * 4);
-    const bomb = Math.random() < Math.min(0.45, 0.2 + level * 0.04);
-    items.push({ x: 4 + Math.random() * (W - 16), y: -8, vy: 0.6 + level * 0.25 + Math.random() * 0.4, bomb });
+    // Heilung wird haeufiger, je weniger Leben du hast
+    const r = Math.random(), low = lives <= 1 ? 2 : lives <= 2 ? 1.4 : 1;
+    const pBomb = Math.min(0.45, 0.2 + level * 0.04);
+    let type = 'coin';
+    if (r < 0.05 * low) type = 'heart';
+    else if (r < 0.065 * low) type = 'potion';
+    else if (r < 0.065 * low + 0.02) type = 'star';
+    else if (Math.random() < pBomb) type = 'bomb';
+    items.push({ x: 4 + Math.random() * (W - 16), y: -8, vy: 0.6 + level * 0.25 + Math.random() * 0.4, type });
   }
 
   for (const it of items) {
@@ -167,18 +260,31 @@ function update() {
     const hit = it.x < player.x + 10 && it.x + 8 > player.x && it.y + 8 > player.y + 1 && it.y < player.y + 8;
     if (hit) {
       it.dead = true;
-      if (it.bomb) {
-        lives--; shake = 10; burst(it.x + 4, it.y + 4, '#e63946', 14); beep(110, 0.25, 'sawtooth', 0.08);
+      const cx = it.x + 4, cy = it.y + 4;
+      if (it.type === 'bomb') {
+        lives--; combo = 0; shake = 10; burst(cx, cy, '#e63946', 14); ring(cx, cy, '#e63946', 18, 1.5);
+        doFlash('#e63946', 0.45); pop('-1', cx, it.y - 6, '#e63946'); beep(110, 0.25, 'sawtooth', 0.08);
         if (lives <= 0) {
           state = 'over';
           if (score > best) { best = score; try { localStorage.setItem('pixelcatcher', best); } catch (e) {} }
           beep(80, 0.5, 'sawtooth', 0.08);
         }
+      } else if (it.type === 'heart') {
+        burst(cx, cy, '#e63946', 6); addLife(1);
+      } else if (it.type === 'potion') {
+        burst(cx, cy, '#57cc99', 10); addLife(1); regen = 2; regenT = 120; pop('REGEN', cx, it.y - 14, '#d8f3dc');
+      } else if (it.type === 'star') {
+        nova();
       } else {
-        score++; burst(it.x + 4, it.y + 4, '#ffd23f'); beep(700 + (score % 5) * 80, 0.07);
+        combo++; comboT = 150;
+        const pts = mult(); score += pts; burst(cx, cy, '#ffd23f');
+        if (pts > 1) pop('+' + pts, cx, it.y - 6, combo >= 10 ? '#e63946' : '#ffd23f');
+        if (combo === 5 || combo === 10) { ring(cx, cy, '#ffd23f', 26, 1.6); doFlash('#ffd23f', 0.3); pop('COMBO X' + mult(), player.x + 5, player.y - 14, '#fff'); }
+        beep(700 + (combo % 5) * 80, 0.07);
       }
     } else if (it.y > H) {
       it.dead = true;
+      if (it.type === 'coin') combo = 0;
     }
   }
   items = items.filter(i => !i.dead);
@@ -193,23 +299,70 @@ function draw() {
   ctx.fillStyle = '#3b2f63'; ctx.fillRect(0, H - 8, W, 8);
   ctx.fillStyle = '#57cc99'; ctx.fillRect(0, H - 8, W, 1);
 
-  items.forEach(it => ctx.drawImage(it.bomb ? S.bomb : S.coin, Math.round(it.x), Math.round(it.y)));
-  if (state !== 'over') {
+  // Items (Heil-Items pulsieren mit Leuchten)
+  items.forEach(it => {
+    const x = Math.round(it.x), y = Math.round(it.y), t = performance.now() / 120;
+    if (it.type === 'heart' || it.type === 'potion') {
+      ctx.fillStyle = 'rgba(87,204,153,' + (0.18 + 0.1 * Math.sin(t)) + ')';
+      ctx.fillRect(x - 2, y - 2, 12, 12); ctx.fillRect(x - 1, y - 3, 10, 14);
+    } else if (it.type === 'star') {
+      ctx.fillStyle = 'rgba(255,210,63,' + (0.2 + 0.12 * Math.sin(t * 1.5)) + ')';
+      ctx.fillRect(x - 2, y - 2, 12, 12);
+      if (Math.random() < 0.3) parts.push({ x: x + Math.random() * 8, y: y + Math.random() * 8, vx: 0, vy: 0.3, g: 0, life: 12, col: '#fff' });
+    }
+    const spr = it.type === 'heart' ? S.heart : S[it.type];
+    ctx.drawImage(spr, x + (it.type === 'heart' ? 0 : 0), y + (it.type === 'heart' ? 1 : 0));
+  });
+
+  // Combo-Aura + Nachbilder
+  if (state === 'play' && combo >= 5) {
+    const col = combo >= 10 ? '230,57,70' : '255,210,63';
+    trail.forEach(t => { ctx.fillStyle = 'rgba(' + col + ',' + (t.life / 10 * 0.35) + ')'; ctx.fillRect(Math.round(t.x), Math.round(t.y), 10, 8); });
+    ctx.fillStyle = 'rgba(' + col + ',0.22)'; ctx.fillRect(Math.round(player.x) - 2, Math.round(player.y) - 2, 14, 12);
+  }
+  // Heil-Glow um den Spieler
+  if (heal > 0 && state === 'play') {
+    ctx.fillStyle = 'rgba(87,204,153,' + heal / 18 * 0.4 + ')';
+    ctx.fillRect(Math.round(player.x) - 3, Math.round(player.y) - 3, 16, 14);
+  }
+  if (state === 'play') {
     const bob = state === 'play' && Math.abs(player.vx) > 0 && (time >> 2) % 2 ? 1 : 0;
     ctx.drawImage(S.player, Math.round(player.x), Math.round(player.y) - bob);
   }
-  parts.forEach(p => { ctx.fillStyle = p.col; ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1); });
+  rings.forEach(drawRing);
+  parts.forEach(p => {
+    ctx.fillStyle = p.col; const x = Math.round(p.x), y = Math.round(p.y);
+    if (p.plus) { ctx.fillRect(x - 1, y, 3, 1); ctx.fillRect(x, y - 1, 1, 3); } else ctx.fillRect(x, y, 1, 1);
+  });
+  floats.forEach(f => text(f.str, Math.round(f.x), Math.round(f.y), f.col));
   ctx.restore();
 
+  // Screen-Flash
+  if (flash) { ctx.globalAlpha = Math.min(1, flash.a); ctx.fillStyle = flash.col; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  // Warn-Vignette bei 1 Leben
+  if (state === 'play' && lives === 1) {
+    const a = 0.12 + 0.1 * Math.sin(performance.now() / 150);
+    ctx.fillStyle = 'rgba(230,57,70,' + a + ')';
+    ctx.fillRect(0, 0, W, 3); ctx.fillRect(0, H - 3, W, 3); ctx.fillRect(0, 0, 3, H); ctx.fillRect(W - 3, 0, 3, H);
+  }
+
   // HUD
-  text('SCORE:' + score, 3, 3, '#fff');
-  for (let i = 0; i < lives; i++) ctx.drawImage(S.heart, W - 10 - i * 9, 3);
+  if (state !== 'title') text('SCORE:' + score, 3, 3, '#fff');
+  if (state === 'play' && combo >= 2) text('COMBO ' + combo + (mult() > 1 ? ' X' + mult() : ''), 3, 11, combo >= 10 ? '#e63946' : combo >= 5 ? '#ffd23f' : '#8d82b8');
+  for (let i = 0; state !== 'title' && i < MAX_LIVES; i++) {
+    const x = W - 9 - i * 8 - 1;
+    if (i < lives) ctx.drawImage(S.heart, x, 3 - (heal > 10 && i === lives - 1 ? 1 : 0));
+    else { ctx.fillStyle = '#3b2f63'; ctx.globalAlpha = .8; ctx.drawImage(S.heart, x, 3); ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(20,16,31,.75)'; ctx.fillRect(x, 3, 7, 6); }
+  }
+  if (state === 'play' && regen > 0) text('REGEN', W - 24, 12, '#57cc99');
 
   if (state === 'title') {
     ctext('PIXEL', 28, '#ffd23f', 4);
     ctext('CATCHER', 50, '#57cc99', 4);
-    ctext('FANG MUENZEN', 78, '#fff');
-    ctext('WEICHE BOMBEN AUS', 86, '#e63946');
+    const leg = [[S.coin, '+1', '#ffd23f'], [S.bomb, '-1', '#e63946'], [S.heart, 'HEIL', '#57cc99'], [S.potion, 'REGEN', '#57cc99'], [S.star, 'NOVA', '#ffd23f']];
+    let lx = 10;
+    leg.forEach(([spr, label, col]) => { ctx.drawImage(spr, lx, 76); text(label, lx + 10, 78, col); lx += 13 + tw(label); });
+    ctext('WEICHE BOMBEN AUS', 88, '#e63946');
     if ((performance.now() / 500 | 0) % 2) ctext('LEERTASTE ZUM START', 102, '#4cc9f0');
     ctext('BEST:' + best, 111, '#8d82b8');
   } else if (state === 'over') {
