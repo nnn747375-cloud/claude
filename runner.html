@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Pixel Runner</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14101f; color: #8d82b8; font-family: monospace; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  canvas { width: min(96vw, calc(72vh * 4 / 3)); aspect-ratio: 4 / 3; image-rendering: pixelated; border: 4px solid #3b2f63; touch-action: none; }
+  p { margin: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="160" height="120"></canvas>
+<p>Leertaste / ↑ / Tippen: springen (nochmal in der Luft = Doppelsprung)</p>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), W = 160, H = 120, GY = H - 16;
+
+// Gleiche Figur wie in Pixel Catcher
+const PAL = { '.':null, k:'#1a1a2e', w:'#fff', g:'#57cc99', G:'#2d936c', y:'#ffd23f', o:'#ee9b00', s:'#8d99ae', r:'#e63946' };
+function sprite(rows) {
+  const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length;
+  const x = c.getContext('2d');
+  rows.forEach((r, j) => [...r].forEach((ch, i) => { if (PAL[ch]) { x.fillStyle = PAL[ch]; x.fillRect(i, j, 1, 1); } }));
+  return c;
+}
+const PL = [
+  ['..kkkkkk..','.kggggggk.','kggwkggwkg','kggkkggkkg','kgggggggg.','.kGGGGGGk.','..kGkkGk..','.kkk..kkk.'],
+  ['..kkkkkk..','.kggggggk.','kggwkggwkg','kggkkggkkg','kgggggggg.','.kGGGGGGk.','..kGkkGk..','..kk..kk..'],
+].map(sprite);
+const COIN = sprite(['..kkkk..','.kyyyyk.','kyywoyyk','kywyyoyk','kyyyyoyk','kyyyooyk','.kyyyyk.','..kkkk..']);
+const SPIKE = sprite(['...kk...','..kssk..','..kssk..','.kssssk.','.kssssk.','kssssssk','kssssssk','kkkkkkkk']);
+
+const F = { 0:'111101101101111',1:'010110010010111',2:'111001111100111',3:'111001111001111',4:'101101111001001',5:'111100111001111',6:'111100111101111',7:'111001001001001',8:'111101111101111',9:'111101111001111',
+  A:'111101111101101',B:'110101110101110',C:'111100100100111',D:'110101101101110',E:'111100110100111',G:'111100101101111',H:'101101111101101',I:'111010010010111',L:'100100100100111',M:'101111111101101',N:'110101101101101',O:'111101101101111',P:'111101111100100',R:'111101110101101',S:'111100111001111',T:'111010010010010',U:'101101101101111',V:'101101101101010',X:'101101010101101',Y:'101101010010010',':':'000010000010000',' ':'0'.repeat(15) };
+function text(s, x, y, col, sc = 1) {
+  ctx.fillStyle = col;
+  [...String(s).toUpperCase()].forEach((ch, n) => { const g = F[ch] || F[' ']; for (let i = 0; i < 15; i++) if (g[i] === '1') ctx.fillRect(x + (n * 4 + i % 3) * sc, y + (i / 3 | 0) * sc, sc, sc); });
+}
+const ctext = (s, y, col, sc = 1) => text(s, Math.round((W - (s.length * 4 - 1) * sc) / 2), y, col, sc);
+
+let ac;
+function beep(f, d = 0.08, t = 'square') {
+  try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(), g = ac.createGain();
+    o.type = t; o.frequency.value = f; g.gain.value = 0.05; g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d); } catch (e) {}
+}
+
+let bonus = 0, state = 'title', p, obs = [], coins = [], parts = [], speed = 1.6, dist, score, spawn, best = +(localStorage.getItem('pixelrunner') || 0), t = 0;
+const hills = Array.from({ length: 8 }, (_, i) => ({ x: i * 26, h: 10 + Math.random() * 22 }));
+
+function start() {
+  p = { y: GY - 8, vy: 0, jumps: 0 }; obs = []; coins = []; parts = []; speed = 1.6; dist = 0; score = 0; bonus = 0; spawn = 60; state = 'play';
+}
+function jump() {
+  if (state !== 'play') return start();
+  if (p.jumps < 2) { p.vy = p.jumps ? -3.3 : -3.8; p.jumps++; beep(p.jumps > 1 ? 620 : 420, 0.1);
+    for (let i = 0; i < 6; i++) parts.push({ x: 20 + Math.random() * 8, y: p.y + 8, vx: -speed - Math.random(), vy: Math.random() * -0.5, l: 15, c: '#8d99ae' }); }
+}
+addEventListener('keydown', e => { if (['Space', 'ArrowUp', 'KeyW'].includes(e.code)) { e.preventDefault(); if (!e.repeat) jump(); } });
+cv.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+
+function update() {
+  t++;
+  parts.forEach(q => { q.x += q.vx; q.y += q.vy; q.l--; }); parts = parts.filter(q => q.l > 0);
+  if (state !== 'play') return;
+  speed = 1.6 + dist / 1500; dist += speed; score = Math.floor(dist / 10);
+  p.vy += 0.22; p.y += p.vy;
+  if (p.y >= GY - 8) { p.y = GY - 8; p.vy = 0; p.jumps = 0; }
+  if (--spawn <= 0) {
+    const gap = 50 + Math.random() * 50 + speed * 14; spawn = gap / speed;
+    if (Math.random() < 0.65) obs.push({ x: W + 4 });
+    else coins.push({ x: W + 4, y: GY - 14 - Math.random() * 28 });
+    if (Math.random() < 0.5) coins.push({ x: W + 30, y: GY - 34 });
+  }
+  obs.forEach(o => o.x -= speed); coins.forEach(c => c.x -= speed);
+  obs = obs.filter(o => o.x > -10); coins = coins.filter(c => c.x > -10 && !c.got);
+  for (const c of coins) if (Math.abs(c.x + 4 - 25) < 8 && Math.abs(c.y + 4 - (p.y + 4)) < 9) {
+    c.got = true; bonus += 5; beep(880, 0.06);
+    for (let i = 0; i < 6; i++) parts.push({ x: c.x + 4, y: c.y + 4, vx: (Math.random() - .5) * 2, vy: (Math.random() - .5) * 2, l: 15, c: '#ffd23f' });
+  }
+  for (const o of obs) if (o.x + 6 > 22 && o.x + 2 < 29 && p.y + 8 > GY - 7) {
+    state = 'over'; beep(90, 0.4, 'sawtooth');
+    for (let i = 0; i < 16; i++) parts.push({ x: 25, y: p.y + 4, vx: (Math.random() - .5) * 3, vy: (Math.random() - .8) * 3, l: 30, c: '#57cc99' });
+    if (score + bonus > best) { best = score + bonus; try { localStorage.setItem('pixelrunner', best); } catch (e) {} }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#14101f'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#231a3d'; hills.forEach(h => ctx.fillRect(Math.floor(h.x), GY - h.h, 26, h.h));
+  if (state === 'play') hills.forEach(h => { h.x -= speed * 0.3; if (h.x < -26) { h.x += 208; h.h = 10 + Math.random() * 22; } });
+  ctx.fillStyle = '#3b2f63'; ctx.fillRect(0, GY, W, H - GY);
+  ctx.fillStyle = '#57cc99'; ctx.fillRect(0, GY, W, 1);
+  ctx.fillStyle = '#2d936c'; for (let x = -(dist | 0) % 16; x < W; x += 16) ctx.fillRect(x, GY + 6, 6, 1);
+
+  obs.forEach(o => ctx.drawImage(SPIKE, Math.round(o.x), GY - 8));
+  coins.forEach(c => ctx.drawImage(COIN, Math.round(c.x), Math.round(c.y + Math.sin(t / 8 + c.x) * 1.5)));
+  if (state !== 'over') ctx.drawImage(PL[p && p.y >= GY - 8 && (t >> 3) % 2 ? 1 : 0], 20, Math.round(p ? p.y : GY - 8));
+  parts.forEach(q => { ctx.fillStyle = q.c; ctx.fillRect(Math.round(q.x), Math.round(q.y), 1, 1); });
+
+  if (state !== 'title') text('SCORE:' + (score + bonus), 3, 3, '#fff');
+  if (state === 'title') {
+    ctext('PIXEL', 22, '#ffd23f', 4); ctext('RUNNER', 44, '#57cc99', 4);
+    ctext('SPRING UEBER DIE SPIKES', 76, '#fff'); ctext('SAMMLE MUENZEN', 85, '#ffd23f');
+    if ((t / 30 | 0) % 2) ctext('LEERTASTE ZUM START', 100, '#4cc9f0');
+    ctext('BEST:' + best, 110, '#8d82b8');
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
+    ctext('GAME OVER', 36, '#e63946', 3); ctext('SCORE:' + (score + bonus), 62, '#fff', 2);
+    ctext('BEST:' + best, 80, '#ffd23f');
+    if ((t / 30 | 0) % 2) ctext('LEERTASTE: NOCHMAL', 100, '#4cc9f0');
+  }
+}
+
+let last = performance.now(), acc = 0;
+(function loop(now) {
+  acc += Math.min(100, now - last); last = now;
+  while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+  draw(); requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
